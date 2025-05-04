@@ -1,0 +1,104 @@
+services:
+  db:
+    image: postgres:13
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_DB=nakliyematik
+      - POSTGRES_USER=caner
+      - POSTGRES_PASSWORD=2001
+    restart: always
+    networks:
+      - internal_network
+      
+  backend:
+    build: 
+      context: ..
+      dockerfile: docker/Dockerfile.backend.prod
+    volumes:
+      - static_volume:/app/static
+      - media_volume:/app/media
+      - ../.env.prod:/app/.env.prod
+    env_file:
+      - ../.env.prod
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DJANGO_ALLOWED_HOSTS=nakliyematik.com,www.nakliyematik.com,backend,localhost
+      - WEBSOCKET_ALLOWED_ORIGINS=https://nakliyematik.com,http://localhost:3000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      - db
+      - redis  # Redis'e bağımlılık ekle
+    restart: always
+    networks:
+      - internal_network
+      - external_network
+    dns:
+      - 8.8.8.8  # Google DNS
+      - 1.1.1.1  # Cloudflare DNS
+      
+  # Nginx artık custom build kullanacak
+  nginx:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend.prod
+      args:
+        - REACT_APP_API_URL=https://nakliyematik.com/api
+        - REACT_APP_WS_URL=wss://nakliyematik.com/ws
+        - BUILD_TIME=${BUILD_TIME:-$(date +%s)}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - ../nginx/certbot/www:/var/www/certbot
+      - static_volume:/var/www/static
+      - media_volume:/var/www/media
+      - /etc/letsencrypt/archive:/etc/letsencrypt/archive:ro
+      # Frontend static volume kaldırıldı
+    depends_on:
+      - backend
+    restart: always
+    networks:
+      - internal_network
+      - external_network
+      
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - ../nginx/certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    networks:
+      - external_network
+
+  # Redis hizmetini ekle
+  redis:
+    image: redis:6-alpine
+    restart: always
+    volumes:
+      - redis_data:/data
+    networks:
+      - internal_network
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+networks:
+  internal_network:
+    internal: true
+  external_network:
+      
+volumes:
+  postgres_data:
+  static_volume:
+  media_volume:
+  redis_data:  # Redis data volume'u ekle

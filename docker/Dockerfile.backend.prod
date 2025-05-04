@@ -1,0 +1,48 @@
+# Python resmi imajı - Daha güvenilir Debian tabanlı imaj kullanıldı
+FROM python:3.10-bullseye
+
+# Çalışma dizini oluştur
+WORKDIR /app
+
+# Python ortam değişkenleri
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONHASHSEED=random
+
+# APT DNS ayarlarını yapılandır (resolv.conf yerine)
+RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4 && \
+    echo 'Acquire::BrokenProxy "true";' > /etc/apt/apt.conf.d/99fixbadproxy
+
+# Sistem bağımlılıkları - netcat düzeltildi
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        postgresql-client \
+        netcat-openbsd \
+        gcc \
+        python3-dev \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/*
+
+# Python bağımlılıkları - önce requirements kopyalanır (layer caching için)
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir gunicorn==21.2.0 daphne==4.0.0
+
+# Entrypoint scriptini kopyala ve izinlerini ayarla
+COPY docker/docker-entrypoint.sh .
+RUN chmod +x docker-entrypoint.sh
+
+# Proje kodlarını kopyala (en sık değişen son kopyalanmalı)
+COPY backend/ .
+
+# Statik dosyalar için klasör oluştur ve izinleri ayarla
+RUN mkdir -p /app/static /app/media && \
+    chmod -R 755 /app/static /app/media
+
+# Port
+EXPOSE 8000
+
+# Başlangıç komutu
+ENTRYPOINT ["./docker-entrypoint.sh"]
+CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "nakliyematik.asgi:application"]

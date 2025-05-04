@@ -1,0 +1,60 @@
+# --- STAGE 1: Frontend Build ---
+FROM node:18-alpine AS frontend-build
+
+WORKDIR /app
+
+# Önce package.json dosyalarını kopyala
+COPY frontend/package*.json ./
+
+# Bağımlılık sorunu çözümü
+RUN npm cache clean --force && \
+    npm install --legacy-peer-deps && \
+    npm install ajv@8.12.0 ajv-keywords@5.1.0 --legacy-peer-deps && \
+    npm ls ajv || true
+
+# Tüm frontend kodunu kopyala
+COPY frontend/ ./
+
+# API URL ve BUILD_TIME değişkenleri
+ARG REACT_APP_API_URL
+ARG REACT_APP_WS_URL
+ARG BUILD_TIME
+ENV REACT_APP_API_URL=${REACT_APP_API_URL}
+ENV REACT_APP_WS_URL=${REACT_APP_WS_URL}
+ENV REACT_APP_BUILD_TIME=${BUILD_TIME}
+
+# Build işlemi
+RUN rm -rf build/
+RUN GENERATE_SOURCEMAP=false npm run build
+
+# Build çıktısını kontrol et
+RUN echo "Build time: ${BUILD_TIME}" > /app/build/build_info.txt
+RUN ls -la build/static/js/ >> /app/build/build_info.txt
+RUN find build -name "main*.js" >> /app/build/build_info.txt
+
+# --- STAGE 2: Nginx ---
+FROM nginx:1.21-alpine
+
+# Nginx yapılandırması
+COPY nginx/nginx.conf /etc/nginx/conf.d/default.conf
+
+# Hedef klasörü önce temizle
+RUN rm -rf /usr/share/nginx/html/*
+
+# Frontend build dosyalarını kopyala
+COPY --from=frontend-build /app/build/ /usr/share/nginx/html/
+
+# Build bilgisini kontrol amaçlı kopyala
+COPY --from=frontend-build /app/build/build_info.txt /usr/share/nginx/html/build_info.txt
+
+# İzinleri ayarla
+RUN chmod -R 755 /usr/share/nginx/html
+
+# Dosyaları kontrol et
+RUN echo "Files in Nginx container:" > /usr/share/nginx/html/nginx_files.txt
+RUN find /usr/share/nginx/html -type f | grep -v "node_modules" | sort >> /usr/share/nginx/html/nginx_files.txt
+RUN ls -la /usr/share/nginx/html/static/js/ >> /usr/share/nginx/html/nginx_files.txt
+
+EXPOSE 80 443
+
+CMD ["nginx", "-g", "daemon off;"]
